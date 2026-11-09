@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanline vs Ray Tracing vs Oclusión Ambiental</title>
+<style>
+  :root { --bg:#fdeff1; --panel:#fff9f7; --line:#f0d3d8; --txt:#5a3b4a; --mut:#a07a8a; --acc:#d9689a; --acc2:#5bb5bf; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:15px/1.45 system-ui, sans-serif; }
+  header { padding:16px 20px; border-bottom:1px solid var(--line); }
+  h1 { margin:0; font-size:20px; }
+  header p { margin:4px 0 0; color:var(--mut); font-size:13px; }
+  main { max-width:1100px; margin:0 auto; padding:16px 20px 40px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:16px; }
+  .controls { display:flex; flex-wrap:wrap; gap:14px 20px; align-items:end; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--mut); }
+  select, input[type=range], button { font:inherit; }
+  select { background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+  input[type=range] { width:170px; accent-color:var(--acc); }
+  .chk { flex-direction:row; align-items:center; gap:6px; color:var(--txt); font-size:13px; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:6px; padding:8px 14px; cursor:pointer; font-weight:600; }
+  button.sec { background:#b68fc9; }
+  button:disabled { opacity:.45; cursor:wait; }
+  canvas { width:100%; height:auto; background:#000; border-radius:6px; display:block; }
+  #main-wrap { max-width:640px; margin:0 auto; }
+  .stats { margin-top:8px; font-size:13px; color:var(--mut); }
+  .stats b { color:var(--txt); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px; }
+  figure { margin:0; }
+  figcaption { font-size:12px; color:var(--mut); margin-top:4px; text-align:center; }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin-top:10px; }
+  th, td { padding:5px 8px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--mut); font-weight:600; }
+  h2 { margin:0 0 8px; font-size:16px; }
+  .note { font-size:12px; color:var(--mut); margin:6px 0 0; }
+  .tablewrap { overflow-x:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Scanline vs Ray Tracing vs Oclusión Ambiental</h1>
+  <p>Renderizador por software en JavaScript (sin librerías). Una misma escena, tres técnicas.</p>
+</header>
+<main>
+
+  <section class="panel">
+    <div class="controls">
+      <label>Técnica
+        <select id="mode">
+          <option value="scan">Scanline (rasterización)</option>
+          <option value="rt">Ray tracing</option>
+          <option value="ao">Oclusión ambiental</option>
+        </select>
+      </label>
+      <label>Resolución
+        <select id="res">
+          <option value="320x240">320 × 240</option>
+          <option value="480x360">480 × 360</option>
+          <option value="640x480">640 × 480</option>
+        </select>
+      </label>
+      <label>Muestras AO (rayos por punto): <b id="nv">16</b>
+        <input id="n" type="range" min="1" max="256" value="16">
+      </label>
+      <label>Radio AO: <b id="dv">1.5</b>
+        <input id="dist" type="range" min="0.2" max="4" step="0.1" value="1.5">
+      </label>
+      <label class="chk"><input id="only" type="checkbox"> Ver solo AO (grises)</label>
+      <button id="go">Renderizar</button>
+      <button id="cmp" class="sec">Comparar las 3 técnicas</button>
+      <button id="study" class="sec">Estudio de muestras AO</button>
+    </div>
+    <p class="note">Los parámetros de AO solo afectan a la técnica «Oclusión ambiental». Los tiempos no incluyen las pausas que se hacen para refrescar la pantalla.</p>
+  </section>
+
+  <section class="panel">
+    <div id="main-wrap">
+      <canvas id="out" width="320" height="240"></canvas>
+      <div class="stats" id="stats">Elige una técnica y pulsa «Renderizar».</div>
+    </div>
+  </section>
+
+  <section class="panel" id="cmp-panel" hidden>
+    <h2>Comparación de las tres técnicas</h2>
+    <div class="grid" id="cmp-grid"></div>
+    <div class="tablewrap"><table id="cmp-table"></table></div>
+    <p class="note">RMSE (0–255, RGB) medido contra el ray tracing, que se toma como referencia por incluir sombras y reflejos. Menor = más parecido.</p>
+  </section>
+
+  <section class="panel" id="study-panel" hidden>
+    <h2>Estudio de ruido: muestras de AO vs tiempo (320 × 240, solo AO)</h2>
+    <div class="grid" id="study-grid"></div>
+    <div class="tablewrap"><table id="study-table"></table></div>
+    <p class="note">RMSE contra una referencia con 256 muestras. Más muestras = menos ruido pero más tiempo (crece de forma lineal).</p>
+  </section>
+
+  <section class="panel">
+    <h2>Historial de mediciones</h2>
+    <div class="tablewrap">
+      <table id="log">
+        <thead><tr><th>Hora</th><th>Técnica</th><th>Resolución</th><th>Parámetros</th><th>Tiempo (ms)</th><th>Rayos</th><th>Mrayos/s</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+'use strict';
+/* =====================================================================
+   COMÚN: escena, cámara, utilidades.
+   Escena estilo pastelería (ver PALETTE). Cambia los colores ahí.
+   ===================================================================== */
+const PALETTE = {                       // estética "pastelería" (rosas pastel, azul cielo, lima)
+  skyTop:    [0.66, 0.86, 0.92],
+  skyBottom: [0.99, 0.89, 0.91],
+  floorA:    [0.93, 0.76, 0.66],   // terraza durazno
+  floorB:    [0.96, 0.83, 0.74],
+  shop:      [0.58, 0.82, 0.86],   // fachada azul-verdosa
+  pinkLight: [0.98, 0.84, 0.86],
+  pinkMid:   [0.93, 0.62, 0.72],
+  mauve:     [0.78, 0.52, 0.64],   // siluetas de edificios
+  lavender:  [0.80, 0.66, 0.90],
+  cream:     [0.99, 0.95, 0.90],
+  wood:      [0.55, 0.33, 0.22],
+  glass:     [0.50, 0.78, 0.88],
+  bun:       [0.88, 0.58, 0.30],
+  lime:      [0.74, 0.88, 0.30],
+  cake:      [0.92, 0.35, 0.40]
+};
+
+const OBJECTS = [];
+const P = PALETTE;
+const box = (x0,y0,z0,x1,y1,z1,color,refl=0,spec=0.15) => OBJECTS.push({ type:'box', min:[x0,y0,z0], max:[x1,y1,z1], color, refl, spec });
+const ball = (x,y,z,r,color,refl=0,spec=0.5) => OBJECTS.push({ type:'sphere', c:[x,y,z], r, color, refl, spec });
+
+OBJECTS.push({ type:'plane', color:P.floorA, color2:P.floorB, refl:0.10, spec:0.0, xmin:-14, xmax:14, zmin:-14, zmax:7 });
+
+// Siluetas de la ciudad al fondo
+box(-9.5,0,-11, -7.0,6.5,-9.5, P.mauve);
+box(-7.0,0,-10.5,-5.0,8.5,-9.0, P.pinkLight);
+box(-5.0,0,-10.5,-3.4,5.0,-9.0, P.mauve);
+box( 3.6,0,-10.5, 5.2,9.5,-9.0, P.pinkLight);
+box( 5.2,0,-11,   7.0,6.0,-9.5, P.mauve);
+box( 7.0,0,-10.5, 9.5,8.0,-9.0, P.pinkLight);
+
+// Pastelería
+box(-3.0,0,-6.0, 3.0,3.2,-4.6, P.shop);                  // cuerpo
+box(-2.4,3.2,-5.9, 2.4,4.6,-4.8, P.pinkLight);           // piso superior
+box(-1.2,3.6,-4.8, 1.0,4.4,-4.7, P.glass, 0.25, 0.5);    // ventana alta
+box( 1.4,3.7,-4.8, 2.1,4.3,-4.7, P.lavender);            // letrero lila
+box(-3.2,2.55,-4.6, 3.2,3.05,-3.9, P.pinkMid);           // toldo
+box(-3.2,2.55,-3.9, 3.2,2.65,-3.85, P.cream);            // borde del toldo
+ball(0,4.7,-5.3,0.75, P.bun, 0, 0.3);                    // pan/galleta del techo
+box(-2.4,0,-4.62, -1.5,2.1,-4.5, P.wood);                // puerta
+box(-0.9,0.65,-4.62, 2.5,2.05,-4.5, P.glass, 0.25, 0.6); // vitrina
+box(-0.7,0.9,-4.58, 2.3,1.0,-4.1, P.pinkLight);          // repisa
+ball(0.1,1.2,-4.4,0.2, P.cake); ball(1.0,1.2,-4.4,0.2, P.bun); ball(1.9,1.2,-4.4,0.2, P.lavender);
+
+// Arbustos lima
+ball(-3.8,0.5,-3.6,0.55, P.lime, 0, 0.1); ball(-4.6,0.45,-3.7,0.45, P.lime, 0, 0.1);
+ball( 3.8,0.5,-3.6,0.55, P.lime, 0, 0.1); ball( 4.6,0.45,-3.7,0.45, P.lime, 0, 0.1);
+
+// Mesas con sillas (terraza)
+function mesa(x, z, pastel){
+  box(x-0.6,0.70,z-0.6, x+0.6,0.80,z+0.6, P.pinkMid, 0.05, 0.3);
+  box(x-0.07,0,z-0.07, x+0.07,0.70,z+0.07, P.mauve);
+  for (const sg of [-1, 1]){
+    const cx = x + sg*1.15;
+    box(cx-0.28,0.00,z-0.28, cx+0.28,0.07,z+0.28, P.mauve);                                  // base
+    box(cx-0.06,0.07,z-0.06, cx+0.06,0.42,z+0.06, P.mauve);                                  // pata
+    box(cx-0.30,0.42,z-0.30, cx+0.30,0.50,z+0.30, P.pinkLight);                              // asiento
+    box(sg>0?cx+0.24:cx-0.30,0.50,z-0.30, sg>0?cx+0.30:cx-0.24,1.10,z+0.30, P.cream);       // respaldo
+  }
+  if (pastel) ball(x,0.80+0.2,z,0.2, P.cake, 0, 0.7);
+}
+mesa(-2.9,-0.8,false); mesa(3.0,-0.8,false); mesa(0.1,1.3,true);
+
+const LIGHT = norm3([-0.5, 1.0, 0.7]);   // dirección hacia la luz
+const AMB = 0.55, DIFF = 0.55;           // ambiente alto = look pastel plano
+const EPS = 1e-3;
+
+const CAM = { pos:[0, 2.9, 8.2], target:[0, 2.3, -3.0], fov: 50 * Math.PI / 180 };
+
+function norm3(v){ const l = Math.hypot(v[0], v[1], v[2]); return [v[0]/l, v[1]/l, v[2]/l]; }
+function sub3(a,b){ return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function cross3(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+
+const FWD   = norm3(sub3(CAM.target, CAM.pos));
+const RIGHT = norm3(cross3(FWD, [0,1,0]));
+const UP    = cross3(RIGHT, FWD);
+
+let seed = 1;
+function rnd(){ // mulberry32: determinista para poder comparar renders
+  seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+  let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+  return ((t ^ t >>> 14) >>> 0) / 4294967296;
+}
+
+function primaryDir(x, y, W, H){
+  const th = Math.tan(CAM.fov / 2), asp = W / H;
+  const u = (2 * (x + 0.5) / W - 1) * th * asp;
+  const v = (1 - 2 * (y + 0.5) / H) * th;
+  const dx = FWD[0] + RIGHT[0]*u + UP[0]*v;
+  const dy = FWD[1] + RIGHT[1]*u + UP[1]*v;
+  const dz = FWD[2] + RIGHT[2]*u + UP[2]*v;
+  const l = Math.hypot(dx, dy, dz);
+  return [dx/l, dy/l, dz/l];
+}
+
+function skyColor(dy, out){
+  let t = dy * 1.5 + 0.2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+  for (let i = 0; i < 3; i++) out[i] = PALETTE.skyBottom[i] + (PALETTE.skyTop[i] - PALETTE.skyBottom[i]) * t;
+}
+
+function albedoAt(o, px, pz, out){
+  let c = o.color;
+  if (o.type === 'plane') c = ((Math.floor(px) + Math.floor(pz)) & 1) ? o.color2 : o.color;
+  out[0] = c[0]; out[1] = c[1]; out[2] = c[2];
+}
+
+function putPx(data, idx, r, g, b){ // gamma 2.0 aprox.
+  r = r < 0 ? 0 : r > 1 ? 1 : r; g = g < 0 ? 0 : g > 1 ? 1 : g; b = b < 0 ? 0 : b > 1 ? 1 : b;
+  data[idx] = Math.sqrt(r) * 255; data[idx+1] = Math.sqrt(g) * 255; data[idx+2] = Math.sqrt(b) * 255; data[idx+3] = 255;
+}
+
+// Pausas para refrescar la UI sin contarlas en el tiempo medido
+let paused = 0, lastYield = 0;
+async function maybeYield(present){
+  const n = performance.now();
+  if (n - lastYield > 40){
+    present();
+    await new Promise(r => setTimeout(r, 0));
+    const t1 = performance.now();
+    paused += t1 - n; lastYield = t1;
+  }
+}
+
+/* =====================================================================
+   RAY CASTING COMÚN (intersecciones) — usado por Ray tracing y AO
+   ===================================================================== */
+let rayCount = 0;
+const HIT = { t:0, o:null, nx:0, ny:0, nz:0 };
+let gnx = 0, gny = 0, gnz = 0;
+
+function hitObj(o, ox, oy, oz, dx, dy, dz, tmax){
+  if (o.type === 'sphere'){
+    const ocx = ox - o.c[0], ocy = oy - o.c[1], ocz = oz - o.c[2];
+    const b = ocx*dx + ocy*dy + ocz*dz;
+    const cc = ocx*ocx + ocy*ocy + ocz*ocz - o.r*o.r;
+    const disc = b*b - cc;
+    if (disc < 0) return 0;
+    const s = Math.sqrt(disc);
+    let t = -b - s;
+    if (t < EPS) t = -b + s;
+    if (t < EPS || t >= tmax) return 0;
+    gnx = (ocx + dx*t) / o.r; gny = (ocy + dy*t) / o.r; gnz = (ocz + dz*t) / o.r;
+    return t;
+  }
+  if (o.type === 'plane'){
+    if (dy > -1e-9 && dy < 1e-9) return 0;
+    const t = -oy / dy;
+    if (t < EPS || t >= tmax) return 0;
+    const px = ox + dx*t, pz = oz + dz*t;
+    if (px < o.xmin || px > o.xmax || pz < o.zmin || pz > o.zmax) return 0;
+    gnx = 0; gny = 1; gnz = 0;
+    return t;
+  }
+  // caja alineada a los ejes (método de las losas)
+  let tn = -Infinity, tf = Infinity, axis = 0;
+  const org = [ox, oy, oz], dir = [dx, dy, dz];
+  for (let a = 0; a < 3; a++){
+    if (dir[a] > -1e-12 && dir[a] < 1e-12){
+      if (org[a] < o.min[a] || org[a] > o.max[a]) return 0;
+      continue;
+    }
+    let t0 = (o.min[a] - org[a]) / dir[a], t1 = (o.max[a] - org[a]) / dir[a];
+    if (t0 > t1){ const tmp = t0; t0 = t1; t1 = tmp; }
+    if (t0 > tn){ tn = t0; axis = a; }
+    if (t1 < tf) tf = t1;
+    if (tn > tf) return 0;
+  }
+  if (tn < EPS || tn >= tmax) return 0;
+  gnx = 0; gny = 0; gnz = 0;
+  const sgn = dir[axis] > 0 ? -1 : 1;
+  if (axis === 0) gnx = sgn; else if (axis === 1) gny = sgn; else gnz = sgn;
+  return tn;
+}
+
+function closest(ox, oy, oz, dx, dy, dz, tmax){
+  let best = tmax, bo = null, bx = 0, by = 0, bz = 0;
+  for (let i = 0; i < OBJECTS.length; i++){
+    const o = OBJECTS[i];
+    const t = hitObj(o, ox, oy, oz, dx, dy, dz, best);
+    if (t > 0 && t < best){ best = t; bo = o; bx = gnx; by = gny; bz = gnz; }
+  }
+  if (!bo) return false;
+  HIT.t = best; HIT.o = bo; HIT.nx = bx; HIT.ny = by; HIT.nz = bz;
+  return true;
+}
+
+function occluded(ox, oy, oz, dx, dy, dz, tmax){
+  for (let i = 0; i < OBJECTS.length; i++){
+    if (hitObj(OBJECTS[i], ox, oy, oz, dx, dy, dz, tmax) > 0) return true;
+  }
+  return false;
+}
+
+/* =====================================================================
+   SCANLINE (Integrante A)
+   Triangulación de la escena + rasterizado por líneas de barrido con
+   z-buffer e interpolación con corrección de perspectiva (1/z).
+   Sin sombras ni reflejos: solo iluminación local (ambiente + Lambert + brillo).
+   ===================================================================== */
+function buildMesh(){
+  const tris = [];
+  for (const o of OBJECTS){
+    if (o.type === 'plane'){
+      const P = [[o.xmin,0,o.zmin],[o.xmax,0,o.zmin],[o.xmax,0,o.zmax],[o.xmin,0,o.zmax]];
+      const n = [0,1,0];
+      tris.push({o, p:[P[0],P[3],P[2]], n:[n,n,n]}, {o, p:[P[0],P[2],P[1]], n:[n,n,n]});
+    } else if (o.type === 'sphere'){
+      const ST = 20, SL = 32, grid = [];
+      for (let i = 0; i <= ST; i++){
+        const th = i / ST * Math.PI, row = [];
+        for (let j = 0; j <= SL; j++){
+          const ph = j / SL * 2 * Math.PI;
+          const n = [Math.sin(th)*Math.cos(ph), Math.cos(th), Math.sin(th)*Math.sin(ph)];
+          row.push({ p:[o.c[0]+o.r*n[0], o.c[1]+o.r*n[1], o.c[2]+o.r*n[2]], n });
+        }
+        grid.push(row);
+      }
+      for (let i = 0; i < ST; i++) for (let j = 0; j < SL; j++){
+        const a = grid[i][j], b = grid[i+1][j], c = grid[i+1][j+1], d = grid[i][j+1];
+        tris.push({o, p:[a.p,b.p,c.p], n:[a.n,b.n,c.n]}, {o, p:[a.p,c.p,d.p], n:[a.n,c.n,d.n]});
+      }
+    } else {
+      for (let a = 0; a < 3; a++) for (const s of [-1, 1]){
+        const b = (a+1)%3, c = (a+2)%3;
+        const corner = (ub, uc) => { const p = [0,0,0]; p[a] = s > 0 ? o.max[a] : o.min[a]; p[b] = ub ? o.max[b] : o.min[b]; p[c] = uc ? o.max[c] : o.min[c]; return p; };
+        const p00 = corner(0,0), p10 = corner(1,0), p11 = corner(1,1), p01 = corner(0,1);
+        const n = [0,0,0]; n[a] = s;
+        tris.push({o, p:[p00,p10,p11], n:[n,n,n]}, {o, p:[p00,p11,p01], n:[n,n,n]});
+      }
+    }
+  }
+  return tris;
+}
+const MESH = buildMesh();
+
+const sx = new Float64Array(3), sy = new Float64Array(3);
+const ATT = [new Float64Array(7), new Float64Array(7), new Float64Array(7)];
+const CX = new Float64Array(2), CA = [new Float64Array(7), new Float64Array(7)], SPAN = new Float64Array(7);
+const albS = new Float64Array(3);
+
+function renderScanline(W, H, img){
+  const data = img.data;
+  const f = (H / 2) / Math.tan(CAM.fov / 2);
+  const zbuf = new Float64Array(W * H); // guarda 1/z (mayor = más cerca)
+  const tmp = new Float64Array(3);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
+    const d = primaryDir(x, y, W, H); skyColor(d[1], tmp);
+    putPx(data, (y*W + x)*4, tmp[0], tmp[1], tmp[2]);
+  }
+  let shaded = 0;
+  for (const tri of MESH){
+    let ok = true;
+    for (let i = 0; i < 3; i++){
+      const v = tri.p[i], n = tri.n[i];
+      const vx = v[0]-CAM.pos[0], vy = v[1]-CAM.pos[1], vz = v[2]-CAM.pos[2];
+      const zc = vx*FWD[0] + vy*FWD[1] + vz*FWD[2];
+      if (zc < 0.05){ ok = false; break; }
+      const xc = vx*RIGHT[0] + vy*RIGHT[1] + vz*RIGHT[2];
+      const yc = vx*UP[0] + vy*UP[1] + vz*UP[2];
+      sx[i] = W/2 + f*xc/zc; sy[i] = H/2 - f*yc/zc;
+      const iz = 1 / zc, a = ATT[i];
+      a[0] = iz; a[1] = v[0]*iz; a[2] = v[1]*iz; a[3] = v[2]*iz; a[4] = n[0]*iz; a[5] = n[1]*iz; a[6] = n[2]*iz;
+    }
+    if (!ok) continue;
+    const minY = Math.min(sy[0], sy[1], sy[2]), maxY = Math.max(sy[0], sy[1], sy[2]);
+    const y0 = Math.max(0, Math.ceil(minY - 0.5)), y1 = Math.min(H - 1, Math.floor(maxY - 0.5));
+    const o = tri.o;
+    for (let y = y0; y <= y1; y++){
+      const yc = y + 0.5;
+      let k = 0;
+      for (let e = 0; e < 3 && k < 2; e++){
+        const i = e, j = (e + 1) % 3, ya = sy[i], yb = sy[j];
+        if ((ya <= yc && yc < yb) || (yb <= yc && yc < ya)){
+          const t = (yc - ya) / (yb - ya);
+          CX[k] = sx[i] + t * (sx[j] - sx[i]);
+          const a = ATT[i], b = ATT[j], c = CA[k];
+          for (let q = 0; q < 7; q++) c[q] = a[q] + t * (b[q] - a[q]);
+          k++;
+        }
+      }
+      if (k < 2) continue;
+      let l = 0, r = 1; if (CX[0] > CX[1]){ l = 1; r = 0; }
+      const xl = CX[l], xr = CX[r], L = CA[l], R = CA[r], span = xr - xl;
+      const x0 = Math.max(0, Math.ceil(xl - 0.5)), x1 = Math.min(W - 1, Math.floor(xr - 0.5));
+      for (let x = x0; x <= x1; x++){
+        const s = span > 1e-9 ? (x + 0.5 - xl) / span : 0;
+        for (let q = 0; q < 7; q++) SPAN[q] = L[q] + s * (R[q] - L[q]);
+        const iz = SPAN[0], zi = y*W + x;
+        if (iz <= zbuf[zi]) continue;
+        zbuf[zi] = iz; shaded++;
+        const w = 1 / iz;
+        const px = SPAN[1]*w, py = SPAN[2]*w, pz = SPAN[3]*w;
+        let nx = SPAN[4]*w, ny = SPAN[5]*w, nz = SPAN[6]*w;
+        const nl = Math.hypot(nx, ny, nz); nx /= nl; ny /= nl; nz /= nl;
+        albedoAt(o, px, pz, albS);
+        const ndl = Math.max(0, nx*LIGHT[0] + ny*LIGHT[1] + nz*LIGHT[2]);
+        let vx = CAM.pos[0]-px, vy = CAM.pos[1]-py, vz = CAM.pos[2]-pz;
+        const vl = Math.hypot(vx, vy, vz); vx /= vl; vy /= vl; vz /= vl;
+        let hx = LIGHT[0]+vx, hy = LIGHT[1]+vy, hz = LIGHT[2]+vz;
+        const hl = Math.hypot(hx, hy, hz); hx /= hl; hy /= hl; hz /= hl;
+        const spec = o.spec * Math.pow(Math.max(0, nx*hx + ny*hy + nz*hz), 48) * (ndl > 0 ? 1 : 0);
+        const k2 = AMB + DIFF * ndl;
+        putPx(data, zi*4, albS[0]*k2 + spec, albS[1]*k2 + spec, albS[2]*k2 + spec);
+      }
+    }
+  }
+  return { rays: 0, extra: MESH.length + ' triángulos, ' + shaded.toLocaleString() + ' px sombreados' };
+}
+
+/* =====================================================================
+   RAY TRACING (Integrante B)
+   Rayo primario por píxel + sombras duras + reflejos (2 rebotes) + brillo.
+   ===================================================================== */
+const rtTmp = [new Float64Array(3), new Float64Array(3)];
+const rtAlb = [new Float64Array(3), new Float64Array(3), new Float64Array(3)];
+
+function traceRT(ox, oy, oz, dx, dy, dz, depth, out){
+  rayCount++;
+  if (!closest(ox, oy, oz, dx, dy, dz, 1e9)){ skyColor(dy, out); return; }
+  const t = HIT.t, o = HIT.o, nx = HIT.nx, ny = HIT.ny, nz = HIT.nz;
+  const px = ox + dx*t, py = oy + dy*t, pz = oz + dz*t;
+  const alb = rtAlb[depth];
+  albedoAt(o, px, pz, alb);
+  const ndl = Math.max(0, nx*LIGHT[0] + ny*LIGHT[1] + nz*LIGHT[2]);
+  let sh = 1;
+  if (ndl > 0){
+    rayCount++;
+    if (occluded(px + nx*EPS, py + ny*EPS, pz + nz*EPS, LIGHT[0], LIGHT[1], LIGHT[2], 1e9)) sh = 0;
+  } else sh = 0;
+  let hx = LIGHT[0]-dx, hy = LIGHT[1]-dy, hz = LIGHT[2]-dz;
+  const hl = Math.hypot(hx, hy, hz); hx /= hl; hy /= hl; hz /= hl;
+  const spec = o.spec * Math.pow(Math.max(0, nx*hx + ny*hy + nz*hz), 48) * sh;
+  const k = AMB + DIFF * ndl * sh;
+  out[0] = alb[0]*k + spec; out[1] = alb[1]*k + spec; out[2] = alb[2]*k + spec;
+  if (o.refl > 0 && depth < 2){
+    const dn = dx*nx + dy*ny + dz*nz;
+    const rx = dx - 2*dn*nx, ry = dy - 2*dn*ny, rz = dz - 2*dn*nz;
+    const rc = rtTmp[depth];
+    traceRT(px + nx*EPS, py + ny*EPS, pz + nz*EPS, rx, ry, rz, depth + 1, rc);
+    const m = o.refl;
+    out[0] = out[0]*(1-m) + rc[0]*m; out[1] = out[1]*(1-m) + rc[1]*m; out[2] = out[2]*(1-m) + rc[2]*m;
+  }
+}
+
+async function renderRT(W, H, img, present){
+  const data = img.data, col = new Float64Array(3);
+  for (let y = 0; y < H; y++){
+    for (let x = 0; x < W; x++){
+      const d = primaryDir(x, y, W, H);
+      traceRT(CAM.pos[0], CAM.pos[1], CAM.pos[2], d[0], d[1], d[2], 0, col);
+      putPx(data, (y*W + x)*4, col[0], col[1], col[2]);
+    }
+    await maybeYield(present);
+  }
+  return { rays: rayCount, extra: 'sombras duras + reflejos (2 rebotes)' };
+}
+
+/* =====================================================================
+   OCLUSIÓN AMBIENTAL (Integrante C)
+   Por cada punto visible se lanzan N rayos en el hemisferio (distribución
+   coseno) y se cuenta cuántos chocan a menos de «radio». AO = 1 - choques/N.
+   ===================================================================== */
+function aoAt(px, py, pz, nx, ny, nz, N, radius){
+  let ax = 1, ay = 0, az = 0;
+  if (Math.abs(nx) > 0.9){ ax = 0; ay = 1; }
+  let tx = ay*nz - az*ny, ty = az*nx - ax*nz, tz = ax*ny - ay*nx;
+  const tl = Math.hypot(tx, ty, tz); tx /= tl; ty /= tl; tz /= tl;
+  const bx = ny*tz - nz*ty, by = nz*tx - nx*tz, bz = nx*ty - ny*tx;
+  const ox = px + nx*EPS*2, oy = py + ny*EPS*2, oz = pz + nz*EPS*2;
+  let occ = 0;
+  for (let i = 0; i < N; i++){
+    const u1 = rnd(), u2 = rnd();
+    const r = Math.sqrt(u1), ph = 2 * Math.PI * u2;
+    const x = r * Math.cos(ph), y = r * Math.sin(ph), z = Math.sqrt(1 - u1);
+    const dx = tx*x + bx*y + nx*z, dy = ty*x + by*y + ny*z, dz = tz*x + bz*y + nz*z;
+    if (occluded(ox, oy, oz, dx, dy, dz, radius)) occ++;
+  }
+  rayCount += N;
+  return 1 - occ / N;
+}
+
+async function renderAO(W, H, img, present, opts){
+  const data = img.data, alb = new Float64Array(3), sky = new Float64Array(3);
+  for (let y = 0; y < H; y++){
+    for (let x = 0; x < W; x++){
+      const d = primaryDir(x, y, W, H), idx = (y*W + x)*4;
+      rayCount++;
+      if (!closest(CAM.pos[0], CAM.pos[1], CAM.pos[2], d[0], d[1], d[2], 1e9)){
+        if (opts.only) putPx(data, idx, 1, 1, 1); else { skyColor(d[1], sky); putPx(data, idx, sky[0], sky[1], sky[2]); }
+        continue;
+      }
+      const t = HIT.t, o = HIT.o, nx = HIT.nx, ny = HIT.ny, nz = HIT.nz;
+      const px = CAM.pos[0] + d[0]*t, py = CAM.pos[1] + d[1]*t, pz = CAM.pos[2] + d[2]*t;
+      const ao = aoAt(px, py, pz, nx, ny, nz, opts.n, opts.dist);
+      if (opts.only){ putPx(data, idx, ao, ao, ao); continue; }
+      albedoAt(o, px, pz, alb);
+      const ndl = Math.max(0, nx*LIGHT[0] + ny*LIGHT[1] + nz*LIGHT[2]);
+      let sh = 0;
+      if (ndl > 0){ rayCount++; sh = occluded(px + nx*EPS, py + ny*EPS, pz + nz*EPS, LIGHT[0], LIGHT[1], LIGHT[2], 1e9) ? 0 : 1; }
+      const k = 0.72 * ao + 0.45 * ndl * sh;
+      putPx(data, idx, alb[0]*k, alb[1]*k, alb[2]*k);
+    }
+    await maybeYield(present);
+  }
+  return { rays: rayCount, extra: opts.n + ' muestras, radio ' + opts.dist };
+}
+
+/* =====================================================================
+   MEDICIÓN Y COMPARACIÓN DE CALIDAD (compartido)
+   ===================================================================== */
+const NAMES = { scan:'Scanline', rt:'Ray tracing', ao:'Oclusión ambiental' };
+const $ = id => document.getElementById(id);
+
+async function renderTo(canvas, mode, W, H, opts){
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  const present = () => ctx.putImageData(img, 0, 0);
+  rayCount = 0; paused = 0; seed = 12345; lastYield = performance.now();
+  const t0 = performance.now();
+  let res;
+  if (mode === 'scan') res = renderScanline(W, H, img);
+  else if (mode === 'rt') res = await renderRT(W, H, img, present);
+  else res = await renderAO(W, H, img, present, opts);
+  const ms = performance.now() - t0 - paused;
+  present();
+  return { ms, rays: res.rays, extra: res.extra, data: img.data };
+}
+
+function rmse(a, b){
+  let s = 0, n = 0;
+  for (let i = 0; i < a.length; i += 4){
+    for (let c = 0; c < 3; c++){ const d = a[i+c] - b[i+c]; s += d*d; n++; }
+  }
+  return Math.sqrt(s / n);
+}
+
+function readOpts(){ return { n: +$('n').value, dist: +$('dist').value, only: $('only').checked }; }
+function readRes(){ const [w, h] = $('res').value.split('x').map(Number); return [w, h]; }
+function fmtMr(rays, ms){ return rays ? (rays / ms / 1000).toFixed(2) : '—'; }
+
+function logRow(mode, W, H, opts, r){
+  const params = mode === 'ao' ? (opts.n + ' muestras, radio ' + opts.dist + (opts.only ? ', solo AO' : '')) : r.extra;
+  const tr = document.createElement('tr');
+  const cells = [new Date().toLocaleTimeString(), NAMES[mode], W + '×' + H, params, r.ms.toFixed(1), r.rays ? r.rays.toLocaleString() : '—', fmtMr(r.rays, r.ms)];
+  for (const c of cells){ const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); }
+  $('log').tBodies[0].prepend(tr);
+}
+
+function setBusy(b){ for (const id of ['go', 'cmp', 'study']) $(id).disabled = b; }
+
+function makeFigure(grid, caption){
+  const fig = document.createElement('figure');
+  const cv = document.createElement('canvas');
+  const cap = document.createElement('figcaption'); cap.textContent = caption;
+  fig.appendChild(cv); fig.appendChild(cap); grid.appendChild(fig);
+  return { cv, cap };
+}
+
+function fillTable(table, head, rows){
+  table.innerHTML = '';
+  const thead = table.createTHead().insertRow();
+  for (const h of head){ const th = document.createElement('th'); th.textContent = h; thead.appendChild(th); }
+  const tb = table.createTBody();
+  for (const r of rows){ const tr = tb.insertRow(); for (const c of r){ tr.insertCell().textContent = c; } }
+}
+
+$('go').onclick = async () => {
+  setBusy(true);
+  const mode = $('mode').value, [W, H] = readRes(), opts = readOpts();
+  $('stats').textContent = 'Renderizando…';
+  const r = await renderTo($('out'), mode, W, H, opts);
+  $('stats').innerHTML = '<b>' + NAMES[mode] + '</b> — tiempo: <b>' + r.ms.toFixed(1) + ' ms</b>' +
+    (r.rays ? ' · rayos: <b>' + r.rays.toLocaleString() + '</b> · <b>' + fmtMr(r.rays, r.ms) + '</b> Mrayos/s' : '') +
+    ' · ' + r.extra;
+  logRow(mode, W, H, opts, r);
+  setBusy(false);
+};
+
+$('cmp').onclick = async () => {
+  setBusy(true);
+  const [W, H] = readRes(), opts = readOpts();
+  $('cmp-panel').hidden = false;
+  const grid = $('cmp-grid'); grid.innerHTML = '';
+  const figs = { scan: makeFigure(grid, 'Scanline'), rt: makeFigure(grid, 'Ray tracing'), ao: makeFigure(grid, 'Oclusión ambiental') };
+  const res = {};
+  for (const m of ['scan', 'rt', 'ao']){
+    figs[m].cap.textContent = NAMES[m] + ' — renderizando…';
+    res[m] = await renderTo(figs[m].cv, m, W, H, opts);
+    figs[m].cap.textContent = NAMES[m] + ' — ' + res[m].ms.toFixed(1) + ' ms';
+    logRow(m, W, H, opts, res[m]);
+  }
+  const rows = ['scan', 'rt', 'ao'].map(m => [
+    NAMES[m], res[m].ms.toFixed(1), res[m].rays ? res[m].rays.toLocaleString() : '—', fmtMr(res[m].rays, res[m].ms),
+    m === 'rt' ? '0 (referencia)' : rmse(res[m].data, res.rt.data).toFixed(2)
+  ]);
+  fillTable($('cmp-table'), ['Técnica', 'Tiempo (ms)', 'Rayos', 'Mrayos/s', 'RMSE vs ray tracing'], rows);
+  setBusy(false);
+};
+
+$('study').onclick = async () => {
+  setBusy(true);
+  const W = 320, H = 240, dist = +$('dist').value;
+  $('study-panel').hidden = false;
+  const grid = $('study-grid'); grid.innerHTML = '';
+  const Ns = [1, 4, 16, 64], REF = 256, res = {};
+  const figs = {};
+  for (const n of Ns.concat([REF])) figs[n] = makeFigure(grid, 'N = ' + n + (n === REF ? ' (referencia)' : ''));
+  for (const n of Ns.concat([REF])){
+    figs[n].cap.textContent = 'N = ' + n + ' — renderizando…';
+    res[n] = await renderTo(figs[n].cv, 'ao', W, H, { n, dist, only: true });
+    figs[n].cap.textContent = 'N = ' + n + ' — ' + res[n].ms.toFixed(0) + ' ms' + (n === REF ? ' (referencia)' : '');
+    logRow('ao', W, H, { n, dist, only: true }, res[n]);
+  }
+  const rows = Ns.concat([REF]).map(n => [n, res[n].ms.toFixed(1), res[n].rays.toLocaleString(), n === REF ? '0 (referencia)' : rmse(res[n].data, res[REF].data).toFixed(2)]);
+  fillTable($('study-table'), ['Muestras (N)', 'Tiempo (ms)', 'Rayos', 'RMSE vs N=256'], rows);
+  setBusy(false);
+};
+
+$('n').oninput = () => { $('nv').textContent = $('n').value; };
+$('dist').oninput = () => { $('dv').textContent = $('dist').value; };
+</script>
+</body>
+</html>

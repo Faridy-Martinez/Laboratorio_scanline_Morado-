@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Laboratorio de Render - Pastelería</title>
+    <style>
+        :root {
+            --bg-color: #fce4ec; /* Rosa muy suave / pastel */
+            --container-bg: #ffffff;
+            --primary-color: #f48fb1; /* Rosa pastel principal */
+            --secondary-color: #81d4fa; /* Azul cielo suave */
+            --accent-color: #ad1457;
+            --text-color: #4a3b32;
+            --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: var(--bg-color);
+            font-family: var(--font-family);
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        .layout-container {
+            display: flex;
+            gap: 20px;
+            background-color: var(--container-bg);
+            padding: 20px;
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(244, 143, 177, 0.25);
+            border: 2px solid #f8bbd0;
+            align-items: flex-start;
+        }
+
+        canvas {
+            border: 3px solid var(--secondary-color);
+            border-radius: 12px;
+            background-color: #e1f5fe;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.05);
+            image-rendering: pixelated;
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            width: 280px;
+        }
+
+        h2 {
+            margin: 0 0 5px 0;
+            color: #880e4f;
+            font-size: 1.4rem;
+        }
+
+        .controls-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            background-color: #fff0f3;
+            padding: 10px;
+            border-radius: 10px;
+            border: 1px solid #ffcdd2;
+        }
+
+        button {
+            padding: 6px 10px;
+            border-radius: 8px;
+            border: 1px solid var(--primary-color);
+            background-color: #ffffff;
+            color: var(--text-color);
+            font-family: var(--font-family);
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 600;
+        }
+
+        button:hover, button.active {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .info-text {
+            font-size: 0.85rem;
+            color: #6d4c41;
+            line-height: 1.4;
+            background-color: #f9fbe7;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #dcedc8;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="layout-container">
+        <!-- Canvas a la izquierda -->
+        <canvas id="renderCanvas" width="500" height="350"></canvas>
+
+        <!-- Panel de controles y opciones a la derecha -->
+        <div class="sidebar">
+            <h2>Laboratorio de render</h2>
+            
+            <div class="controls-group">
+                <button class="active">1 Scanline</button>
+                <button>2 Ray tracing</button>
+                <button>3 Ray tracing + AO</button>
+            </div>
+
+            <div class="controls-group">
+                <button>s sombras on/off</button>
+                <button>+ / - muestras</button>
+            </div>
+
+            <div class="info-text">
+                <strong>Modo:</strong> Scanline (Z-Buffer)<br>
+                <strong>Resolución:</strong> 500×350<br>
+                <strong>Estado:</strong> Rasterización activa
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('renderCanvas');
+        const ctx = canvas.getContext('2d');
+        const width = canvas.width;
+        const height = canvas.height;
+
+        class Vec3 {
+            constructor(x, y, z) { this.x = x; this.y = y; this.z = z; }
+            sub(v) { return new Vec3(this.x - v.x, this.y - v.y, this.z - v.z); }
+            add(v) { return new Vec3(this.x + v.x, this.y + v.y, this.z + v.z); }
+            mul(s) { return new Vec3(this.x * s, this.y * s, this.z * s); }
+            dot(v) { return this.x * v.x + this.y * v.y + this.z * v.z; }
+            cross(v) {
+                return new Vec3(
+                    this.y * v.z - this.z * v.y,
+                    this.z * v.x - this.x * v.z,
+                    this.x * v.y - this.y * v.x
+                );
+            }
+            norm() {
+                const len = Math.sqrt(this.dot(this));
+                return len > 0 ? new Vec3(this.x / len, this.y / len, this.z / len) : new Vec3(0,0,0);
+            }
+        }
+
+        class Triangle {
+            constructor(v0, v1, v2, color) {
+                this.v0 = v0; this.v1 = v1; this.v2 = v2; this.color = color;
+            }
+        }
+
+        const cameraPos = new Vec3(0, 1.2, 4.0);
+        const lightPos = new Vec3(2, 4, 3);
+        const ambientLight = 0.3;
+        const triangles = [];
+
+        function addQuad(v0, v1, v2, v3, color) {
+            triangles.push(new Triangle(v0, v1, v2, color));
+            triangles.push(new Triangle(v0, v2, v3, color));
+        }
+
+        // Plano del suelo (estilo tablero / pastelería)
+        addQuad(
+            new Vec3(-5, 0, -5), new Vec3(5, 0, -5),
+            newVec = new Vec3(5, 0, 5), new Vec3(-5, 0, 5),
+            [238, 238, 238]
+        );
+
+        // Tres esferas alineadas (como en la referencia, con colores de la paleta pastel)
+        function addSphere(center, radius, color) {
+            const latBands = 10, longBands = 10;
+            for (let i = 0; i < latBands; i++) {
+                const theta1 = (i / latBands) * Math.PI;
+                const theta2 = ((i + 1) / latBands) * Math.PI;
+                for (let j = 0; j < longBands; j++) {
+                    const phi1 = (j / longBands) * 2 * Math.PI;
+                    const phi2 = ((j + 1) / longBands) * 2 * Math.PI;
+
+                    const p1 = new Vec3(center.x + radius * Math.sin(theta1) * Math.cos(phi1), center.y + radius * Math.cos(theta1), center.z + radius * Math.sin(theta1) * Math.sin(phi1));
+                    const p2 = new Vec3(center.x + radius * Math.sin(theta1) * Math.cos(phi2), center.y + radius * Math.cos(theta1), center.z + radius * Math.sin(theta1) * Math.sin(phi2));
+                    const p3 = new Vec3(center.x + radius * Math.sin(theta2) * Math.cos(phi2), center.y + radius * Math.cos(theta2), center.z + radius * Math.sin(theta2) * Math.sin(phi2));
+                    const p4 = new Vec3(center.x + radius * Math.sin(theta2) * Math.cos(phi1), center.y + radius * Math.cos(theta2), center.z + radius * Math.sin(theta2) * Math.sin(phi1));
+
+                    addQuad(p1, p2, p3, p4, color);
+                }
+            }
+        }
+
+        // Esfera Izquierda (Verde menta / pastel)
+        addSphere(new Vec3(-1.2, 0.6, 0.5), 0.6, [165, 214, 167]);
+        // Esfera Central (Rosa / Fresa)
+        addSphere(new Vec3(0.0, 0.5, 0.0), 0.5, [244, 143, 177]);
+        // Esfera Derecha (Azul cielo)
+        addSphere(new Vec3(1.1, 0.4, -0.4), 0.4, [129, 212, 250]);
+
+        function project(v) {
+            const fov = 400;
+            const xRel = v.x - cameraPos.x;
+            const yRel = v.y - cameraPos.y;
+            const zRel = cameraPos.z - v.z;
+            return {
+                x: Math.round((xRel * fov) / zRel + width / 2),
+                y: Math.round((-yRel * fov) / zRel + height / 2),
+                z: zRel
+            };
+        }
+
+        function renderScanline() {
+            const imgData = ctx.createImageData(width, height);
+            const pixels = imgData.data;
+            const zBuffer = new Float32Array(width * height).fill(Infinity);
+
+            for (let i = 0; i < pixels.length; i += 4) {
+                pixels[i] = 225; pixels[i+1] = 245; pixels[i+2] = 254; pixels[i+3] = 255;
+            }
+
+            for (const tri of triangles) {
+                const edge1 = tri.v1.sub(tri.v0);
+                const edge2 = tri.v2.sub(tri.v0);
+                const normal = edge1.cross(edge2).norm();
+
+                const center = tri.v0.add(tri.v1).add(tri.v2).mul(1/3);
+                const viewDir = cameraPos.sub(center).norm();
+                if (normal.dot(viewDir) <= 0) continue;
+
+                const lightDir = lightPos.sub(center).norm();
+                const diff = Math.max(0, normal.dot(lightDir));
+                const intensity = Math.min(1.0, ambientLight + diff * 0.7);
+
+                const r = Math.round(tri.color[0] * intensity);
+                const g = Math.round(tri.color[1] * intensity);
+                const b = Math.round(tri.color[2] * intensity);
+
+                const p0 = project(tri.v0);
+                const p1 = project(tri.v1);
+                const p2 = project(tri.v2);
+
+                const minX = Math.max(0, Math.min(p0.x, p1.x, p2.x));
+                const maxX = Math.min(width - 1, Math.max(p0.x, p1.x, p2.x));
+                const minY = Math.max(0, Math.min(p0.y, p1.y, p2.y));
+                const maxY = Math.min(height - 1, Math.max(p0.y, p1.y, p2.y));
+
+                const area = (p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x);
+                if (area === 0) continue;
+
+                for (let y = minY; y <= maxY; y++) {
+                    for (let x = minX; x <= maxX; x++) {
+                        const w0 = ((p1.x - x) * (p2.y - y) - (p1.y - y) * (p2.x - x)) / area;
+                        const w1 = ((p2.x - x) * (p0.y - y) - (p2.y - y) * (p0.x - x)) / area;
+                        const w2 = 1.0 - w0 - w1;
+
+                        if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
+                            const z = w0 * p0.z + w1 * p1.z + w2 * p2.z;
+                            const idx = y * width + x;
+
+                            if (z < zBuffer[idx]) {
+                                zBuffer[idx] = z;
+                                const pixIdx = idx * 4;
+                                pixels[pixIdx] = r;
+                                pixels[pixIdx + 1] = g;
+                                pixels[pixIdx + 2] = b;
+                                pixels[pixIdx + 3] = 255;
+                            }
+                        }
+                    }
+                }
+            }
+            ctx.putImageData(imgData, 0, 0);
+        }
+
+        window.addEventListener('load', renderScanline);
+    </script>
+</body>
+</html>

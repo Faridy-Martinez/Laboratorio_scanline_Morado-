@@ -57,3 +57,4 @@ También se observó que al aumentar la resolución y la cantidad de muestras de
 <img width="1258" height="875" alt="Captura de pantalla 2026-11-12 170818" src="https://github.com/user-attachments/assets/ddd488d3-db79-4f29-9fed-3334a4d2ac50" />
 <img width="1283" height="887" alt="Captura de pantalla 2026-11-12 170743" src="https://github.com/user-attachments/assets/a35dfd6e-b991-49be-84f1-42f29b568163" />
 <img width="1330" height="897" alt="Captura de pantalla 2026-11-12 171037" src="https://github.com/user-attachments/assets/a51acd0e-db36-45d1-b688-3814d4feca2a" />
+<img width="1327" height="340" alt="Captura de pantalla 2026-11-12 171058" src="https://github.com/user-attachments/assets/b3ef0cec-e589-4d01-bf09-ec6bea99e4eb" />

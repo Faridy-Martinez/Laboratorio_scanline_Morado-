@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Render de Juego - Estética Pastelería</title>
+    <style>
+        :root {
+            --bg-color: #fce4ec;
+            --container-bg: #ffffff;
+            --primary-color: #f48fb1;
+            --secondary-color: #81d4fa;
+            --accent-color: #ad1457;
+            --text-color: #4a3b32;
+            --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        body { margin: 0; padding: 20px; background-color: var(--bg-color); font-family: var(--font-family); color: var(--text-color); display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
+        h1 { margin-bottom: 5px; color: #880e4f; font-size: 1.8rem; text-align: center; }
+        p.subtitle { margin-top: 0; margin-bottom: 20px; color: #6d4c41; font-size: 0.95rem; }
+        .main-container { background-color: var(--container-bg); padding: 20px; border-radius: 16px; box-shadow: 0 8px 24px rgba(244, 143, 177, 0.25); display: flex; flex-direction: column; align-items: center; gap: 15px; border: 2px solid #f8bbd0; max-width: 100%; }
+        .controls { display: flex; gap: 15px; flex-wrap: wrap; justify-content: center; align-items: center; background-color: #fff0f3; padding: 10px 15px; border-radius: 10px; border: 1px solid #ffcdd2; }
+        label { font-weight: 600; font-size: 0.9rem; color: #ad1457; }
+        select, button { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--primary-color); background-color: #ffffff; color: var(--text-color); font-family: var(--font-family); font-size: 0.9rem; cursor: pointer; transition: all 0.2s ease; }
+        select:hover, button:hover { background-color: #fce4ec; }
+        button.render-btn { background-color: var(--primary-color); color: white; font-weight: bold; border: none; }
+        button.render-btn:hover { background-color: #ec407a; }
+        button.cmp-btn { background-color: var(--secondary-color); color: white; font-weight: bold; border: none; }
+        button.cmp-btn:hover { background-color: #4fc3f7; }
+        canvas { border: 3px solid var(--secondary-color); border-radius: 12px; background-color: #e1f5fe; box-shadow: inset 0 0 10px rgba(0,0,0,0.05); max-width: 100%; }
+        .thumbs { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+        .thumbs figure { margin: 0; text-align: center; font-size: 0.8rem; color: #880e4f; }
+        .thumbs canvas { width: 200px; height: 150px; border-width: 2px; }
+        .stats-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85rem; }
+        .stats-table th, .stats-table td { border: 1px solid #f8bbd0; padding: 6px 10px; text-align: center; }
+        .stats-table th { background-color: #f8bbd0; color: #880e4f; }
+        .stats-table td { background-color: #fff; }
+        .note { font-size: 0.75rem; color: #6d4c41; margin: 0; max-width: 600px; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <h1>🍰 Comparativa de Render - Pastelería</h1>
+    <p class="subtitle">Escena 3D con estética temática (Scanline, Ray Tracing y Oclusión Ambiental)</p>
+
+    <div class="main-container">
+        <!-- Panel de Controles y Selector de Técnica -->
+        <div class="controls">
+            <div>
+                <label for="techniqueSelect">Técnica:</label>
+                <select id="techniqueSelect">
+                    <option value="scanline">1. Scanline (Z-Buffer)</option>
+                    <option value="raytracing">2. Ray Tracing</option>
+                    <option value="ao">3. Oclusión Ambiental</option>
+                </select>
+            </div>
+            <div>
+                <label for="resolutionSelect">Resolución:</label>
+                <select id="resolutionSelect">
+                    <option value="low">Baja (200x150)</option>
+                    <option value="medium" selected>Media (400x300)</option>
+                    <option value="high">Alta (600x450)</option>
+                </select>
+            </div>
+            <div>
+                <label for="aoSamples">Muestras AO:</label>
+                <select id="aoSamples">
+                    <option>8</option><option selected>16</option><option>32</option><option>64</option>
+                </select>
+            </div>
+            <button class="render-btn" id="renderBtn">Renderizar</button>
+            <button class="cmp-btn" id="compareBtn">Comparar todas</button>
+        </div>
+
+        <!-- Canvas de Visualización -->
+        <canvas id="renderCanvas" width="400" height="300"></canvas>
+
+        <!-- Comparación visual lado a lado (Parte 4) -->
+        <div class="thumbs" id="thumbs"></div>
+
+        <!-- Tabla de Tiempos y Calidad (Parte 4) -->
+        <table class="stats-table">
+            <thead>
+                <tr>
+                    <th>Técnica</th>
+                    <th>Tiempo de Render (ms)</th>
+                    <th>Error vs Ray Tracing (MAE %)</th>
+                    <th>Estado</th>
+                </tr>
+            </thead>
+            <tbody id="statsBody">
+                <tr><td>Scanline</td><td id="time-scanline">-</td><td id="mae-scanline">-</td><td id="status-scanline">Pendiente</td></tr>
+                <tr><td>Ray Tracing</td><td id="time-raytracing">-</td><td id="mae-raytracing">-</td><td id="status-raytracing">Pendiente</td></tr>
+                <tr><td>Oclusión Ambiental</td><td id="time-ao">-</td><td id="mae-ao">-</td><td id="status-ao">Pendiente</td></tr>
+            </tbody>
+        </table>
+        <p class="note">MAE: diferencia media por canal contra la imagen de Ray Tracing (referencia). Scanline no tiene sombras ni reflejos; AO solo calcula oclusión, y su ruido depende de las muestras.</p>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('renderCanvas');
+        const ctx = canvas.getContext('2d');
+        const renderBtn = document.getElementById('renderBtn');
+        const compareBtn = document.getElementById('compareBtn');
+        const techniqueSelect = document.getElementById('techniqueSelect');
+        const resolutionSelect = document.getElementById('resolutionSelect');
+        const $ = id => document.getElementById(id);
+        const TECH = ['scanline', 'raytracing', 'ao'];
+        const LABEL = { scanline: 'Scanline', raytracing: 'Ray Tracing', ao: 'Oclusión Ambiental' };
+
+        /* ===== BASE COMPARTIDA: vectores, escena, cámara e iluminación ===== */
+        let W = 400, H = 300, F, img, px;
+        function setup() {                       // se llama antes de cada render (resolución dinámica)
+            W = canvas.width; H = canvas.height;
+            F = (H / 2) / Math.tan(25 * Math.PI / 180);
+            img = ctx.createImageData(W, H); px = img.data;
+        }
+        const V = {
+            add: (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]],
+            sub: (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]],
+            mul: (a, s) => [a[0]*s, a[1]*s, a[2]*s],
+            dot: (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2],
+            cross: (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]],
+            norm: a => { const l = Math.hypot(a[0], a[1], a[2]); return [a[0]/l, a[1]/l, a[2]/l]; }
+        };
+        const C = h => [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16) / 255);
+        const CAM = [0, 1.5, 5], LIGHT = [3, 6, 4];
+        const S = [
+            { c: [-1.7, .7, -1], r: .7,  col: C('#f48fb1'), refl: 0 },    // rosa pastel
+            { c: [0, 1, -2.5],   r: 1,   col: C('#ce93d8'), refl: .35 },  // lavanda (con reflejo)
+            { c: [1.5, .6, -.5], r: .6,  col: C('#81d4fa'), refl: 0 },    // azul cielo
+            { c: [-.4, .35, .6], r: .35, col: C('#fff3e0'), refl: 0 }     // crema
+        ];
+        const PLANE = { y: 0, refl: .12 };
+        const planeCol = (x, z) => ((Math.floor(x) + Math.floor(z)) & 1) ? C('#efdcc9') : C('#d7ccc8');
+        const mix = (a, b, t) => a.map((k, i) => k * (1 - t) + b[i] * t);
+        const SKY0 = C('#fce4ec'), SKY1 = C('#b3e5fc');
+        const sky = dy => mix(SKY0, SKY1, Math.min(1, Math.max(0, dy * 1.8)));
+        const primary = (x, y) => V.norm([(x + .5 - W/2) / F, -(y + .5 - H/2) / F, -1]);
+        const put = (i, c) => { px[4*i] = c[0]*255; px[4*i+1] = c[1]*255; px[4*i+2] = c[2]*255; px[4*i+3] = 255; };
+        function lighting(p, n, col, d, sh) {
+            const l = V.norm(V.sub(LIGHT, p)), df = Math.max(0, V.dot(n, l)) * sh;
+            const r = V.sub(V.mul(n, 2 * V.dot(n, l)), l);
+            const sp = sh * Math.pow(Math.max(0, -V.dot(r, d)), 40) * .4;
+            return col.map(k => k * (.28 + .72 * df) + sp);
+        }
+
+        /* ===== PARTE 1: SCANLINE (triángulos + z-buffer, sin sombras ni reflejos) ===== */
+        const tris = [];
+        (function buildMesh() {
+            const NL = 16, NM = 24;
+            for (const s of S) {
+                const vt = (i, j) => {
+                    const th = i / NL * Math.PI, ph = j / NM * 2 * Math.PI;
+                    const n = [Math.sin(th) * Math.cos(ph), Math.cos(th), Math.sin(th) * Math.sin(ph)];
+                    return { p: V.add(s.c, V.mul(n, s.r)), n };
+                };
+                for (let i = 0; i < NL; i++) for (let j = 0; j < NM; j++) {
+                    const a = vt(i, j), b = vt(i+1, j), c = vt(i+1, j+1), d = vt(i, j+1);
+                    tris.push({ v: [a, b, c], col: s.col }, { v: [a, c, d], col: s.col });
+                }
+            }
+            const q = (x, z) => ({ p: [x, 0, z], n: [0, 1, 0] });
+            tris.push({ v: [q(-40, -40), q(40, -40), q(40, 4)], plane: 1 }, { v: [q(-40, -40), q(40, 4), q(-40, 4)], plane: 1 });
+        })();
+        const lerpA = (a, b, t) => a.map((k, i) => k + (b[i] - k) * t);
+        function rasterTri(t, zb) {
+            const v = t.v.map(({ p, n }) => {
+                const q = V.sub(p, CAM), w = 1 / -q[2];
+                return [W/2 + F*q[0]*w, H/2 - F*q[1]*w, w, p[0]*w, p[1]*w, p[2]*w, n[0]*w, n[1]*w, n[2]*w];
+            });
+            const y0 = Math.max(0, Math.ceil(Math.min(v[0][1], v[1][1], v[2][1]) - .5));
+            const y1 = Math.min(H - 1, Math.floor(Math.max(v[0][1], v[1][1], v[2][1]) - .5));
+            for (let y = y0; y <= y1; y++) {
+                const yc = y + .5, hits = [];
+                for (let e = 0; e < 3; e++) {
+                    const a = v[e], b = v[(e + 1) % 3];
+                    if ((a[1] <= yc && b[1] > yc) || (b[1] <= yc && a[1] > yc)) hits.push(lerpA(a, b, (yc - a[1]) / (b[1] - a[1])));
+                }
+                if (hits.length < 2) continue;
+                hits.sort((m, n) => m[0] - n[0]);
+                const L = hits[0], R = hits[hits.length - 1];
+                const x0 = Math.max(0, Math.ceil(L[0] - .5)), x1 = Math.min(W - 1, Math.floor(R[0] - .5));
+                for (let x = x0; x <= x1; x++) {
+                    const a = lerpA(L, R, R[0] === L[0] ? 0 : (x + .5 - L[0]) / (R[0] - L[0]));
+                    const z = 1 / a[2], idx = y * W + x;
+                    if (z >= zb[idx]) continue;
+                    zb[idx] = z;
+                    const p = [a[3] * z, a[4] * z, a[5] * z], n = V.norm([a[6], a[7], a[8]]);
+                    put(idx, lighting(p, n, t.plane ? planeCol(p[0], p[2]) : t.col, V.norm(V.sub(p, CAM)), 1));
+                }
+            }
+        }
+        function renderScan() {
+            const zb = new Float32Array(W * H).fill(Infinity);
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) put(y * W + x, sky(primary(x, y)[1]));
+            for (const t of tris) rasterTri(t, zb);
+        }
+
+        /* ===== PARTE 2: RAY TRACING (primarios, esferas + plano, sombras, un reflejo) ===== */
+        function hitSphere(o, d, s) {
+            const oc = V.sub(o, s.c), b = V.dot(oc, d), c = V.dot(oc, oc) - s.r * s.r, disc = b*b - c;
+            if (disc < 0) return Infinity;
+            const q = Math.sqrt(disc); let t = -b - q;
+            if (t < 1e-4) t = -b + q;
+            return t > 1e-4 ? t : Infinity;
+        }
+        function hitPlane(o, d) {
+            if (Math.abs(d[1]) < 1e-6) return Infinity;
+            const t = (PLANE.y - o[1]) / d[1];
+            return t > 1e-4 ? t : Infinity;
+        }
+        function closest(o, d) {
+            let t = hitPlane(o, d), obj = PLANE;
+            for (const s of S) { const u = hitSphere(o, d, s); if (u < t) { t = u; obj = s; } }
+            return t < Infinity ? { t, obj } : null;
+        }
+        function surf(h, o, d) {
+            const p = V.add(o, V.mul(d, h.t));
+            if (h.obj === PLANE) return { p, n: [0, 1, 0], col: planeCol(p[0], p[2]), refl: PLANE.refl };
+            return { p, n: V.mul(V.sub(p, h.obj.c), 1 / h.obj.r), col: h.obj.col, refl: h.obj.refl };
+        }
+        function trace(o, d, depth) {
+            const h = closest(o, d);
+            if (!h) return sky(d[1]);
+            const { p, n, col, refl } = surf(h, o, d);
+            const so = V.add(p, V.mul(n, 1e-3)), tl = V.sub(LIGHT, so), dist = Math.hypot(...tl);
+            const sh = closest(so, V.mul(tl, 1 / dist));            // rayo de sombra
+            let c = lighting(p, n, col, d, (sh && sh.t < dist) ? 0 : 1);
+            if (refl > 0 && depth < 1) {                            // un solo reflejo
+                const rd = V.sub(d, V.mul(n, 2 * V.dot(d, n)));
+                c = mix(c, trace(so, rd, depth + 1), refl);
+            }
+            return c;
+        }
+        function renderRT() {
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) put(y * W + x, trace(CAM, primary(x, y), 0));
+        }
+
+        /* ===== PARTE 3: OCLUSIÓN AMBIENTAL (hemisferio con coseno, rayos cortos) ===== */
+        function renderAO(N) {
+            const MAXD = 1.4;
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+                const d = primary(x, y), h = closest(CAM, d), i = y * W + x;
+                if (!h) { put(i, sky(d[1])); continue; }
+                const { p, n, col } = surf(h, CAM, d), o = V.add(p, V.mul(n, 1e-3));
+                const t = V.norm(V.cross(Math.abs(n[0]) > .9 ? [0, 1, 0] : [1, 0, 0], n)), b = V.cross(n, t);
+                let occ = 0;
+                for (let k = 0; k < N; k++) {
+                    const u1 = Math.random(), r = Math.sqrt(u1), ph = 2 * Math.PI * Math.random();
+                    const dir = V.add(V.add(V.mul(t, r * Math.cos(ph)), V.mul(n, Math.sqrt(1 - u1))), V.mul(b, r * Math.sin(ph)));
+                    const q = closest(o, dir);
+                    if (q && q.t < MAXD) occ++;
+                }
+                const ao = 1 - occ / N;
+                put(i, col.map(k => k * (.12 + .88 * ao) * (.8 + .2 * n[1])));
+            }
+        }
+
+        /* ===== PARTE 4: MEDICIÓN, COMPARACIÓN DE CALIDAD Y UI ===== */
+        const R = {};                            // resultados por técnica: { ms, data }
+        function render(tech) {
+            setup();
+            const t0 = performance.now();
+            if (tech === 'scanline') renderScan();
+            else if (tech === 'raytracing') renderRT();
+            else renderAO(+$('aoSamples').value);
+            ctx.putImageData(img, 0, 0);
+            R[tech] = { ms: performance.now() - t0, data: new Uint8ClampedArray(px) };
+        }
+        function mae(a, b) {
+            let s = 0;
+            for (let i = 0; i < a.length; i += 4) s += Math.abs(a[i]-b[i]) + Math.abs(a[i+1]-b[i+1]) + Math.abs(a[i+2]-b[i+2]);
+            return s / (a.length / 4 * 3) / 255 * 100;
+        }
+        function refresh() {
+            const th = $('thumbs'); th.innerHTML = '';
+            for (const t of TECH) {
+                if (!R[t]) continue;
+                $(`time-${t}`).innerText = `${R[t].ms.toFixed(2)} ms`;
+                $(`status-${t}`).innerText = 'Completado ✓';
+                $(`status-${t}`).style.color = '#2e7d32';
+                $(`mae-${t}`).innerText = t === 'raytracing' ? '0 (referencia)' : (R.raytracing ? mae(R[t].data, R.raytracing.data).toFixed(2) : '-');
+                const c = document.createElement('canvas'); c.width = W; c.height = H;
+                c.getContext('2d').putImageData(new ImageData(R[t].data, W, H), 0, 0);
+                const f = document.createElement('figure'); f.appendChild(c);
+                f.insertAdjacentHTML('beforeend', `<figcaption>${LABEL[t]}</figcaption>`);
+                th.appendChild(f);
+            }
+        }
+        function busy(msg, fn) {                 // deja pintar el estado antes de bloquear el hilo
+            renderBtn.disabled = compareBtn.disabled = true;
+            for (const t of TECH) { $(`status-${t}`).innerText = msg; $(`status-${t}`).style.color = ''; }
+            setTimeout(() => { fn(); refresh(); renderBtn.disabled = compareBtn.disabled = false; }, 30);
+        }
+
+        // Resolución dinámica: al cambiarla se descartan los resultados (no son comparables)
+        resolutionSelect.addEventListener('change', (e) => {
+            const res = e.target.value;
+            if (res === 'low') { canvas.width = 200; canvas.height = 150; }
+            else if (res === 'medium') { canvas.width = 400; canvas.height = 300; }
+            else if (res === 'high') { canvas.width = 600; canvas.height = 450; }
+            for (const t of TECH) {
+                delete R[t];
+                $(`time-${t}`).innerText = '-'; $(`mae-${t}`).innerText = '-';
+                $(`status-${t}`).innerText = 'Pendiente'; $(`status-${t}`).style.color = '';
+            }
+            $('thumbs').innerHTML = '';
+        });
+
+        renderBtn.addEventListener('click', () => {
+            const tech = techniqueSelect.value;
+            $(`status-${tech}`).innerText = 'Renderizando…';
+            renderBtn.disabled = compareBtn.disabled = true;
+            setTimeout(() => { render(tech); refresh(); renderBtn.disabled = compareBtn.disabled = false; }, 30);
+        });
+
+        compareBtn.addEventListener('click', () => busy('Renderizando…', () => {
+            for (const t of TECH) render(t);
+            render(techniqueSelect.value);       // deja en el canvas la técnica elegida
+        }));
+
+        renderBtn.click();                       // primer render al abrir la página
+    </script>
+</body>
+</html>
